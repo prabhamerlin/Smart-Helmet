@@ -1,0 +1,192 @@
+
+/*
+>> Pulse Sensor Amped Leonardo 1.2 <<
+
+This code is for Pulse Sensor Amped by Joel Murphy and Yury Gitman
+    www.pulsesensor.com 
+    >>> Pulse Sensor purple wire goes to Analog Pin 0 <<<
+Pulse Sensor sample aquisition and processing happens in the background via Timer 1 interrupt. 2mS sample rate.
+analogWrite command [PWM] on pins 9 and 10 will not work when using this code, because we are using Timer 1!
+
+The following variables are automatically updated:
+Signal :    int that holds the analog signal data straight from the sensor. updated every 2mS.
+IBI  :      int that holds the time interval between beats. 2mS resolution.
+BPM  :      int that holds the heart rate value, derived every beat, from averaging previous 10 IBI values.
+QS  :       boolean that is made true whenever Pulse is found and BPM is updated. User must reset.
+Pulse :     boolean that is true when a heartbeat is sensed then false in time with pin13 LED going out.
+
+This code is designed with output serial data to Processing sketch "PulseSensorAmped_Processing-xx"
+The Processing sketch is a simple data visualizer. 
+All the work to find the heartbeat and determine the heartrate happens in the code below.
+Pin 13 LED will blink with heartbeat.
+If you want to use pin 13 for something else, adjust the interrupt handler
+It will also fade an LED on pin fadePin with every beat. Put an LED and series resistor from fadePin to GND.
+Check here for detailed code walkthrough:
+http://pulsesensor.myshopify.com/pages/pulse-sensor-amped-arduino-v1dot1
+
+Code Made by Joel Murphy, updated Summer 2014
+
+*/
+
+
+//  VARIABLES
+
+
+#include <SPI.h>
+#include <RF24.h>
+// ce,csn pins
+RF24 radio(9,10);
+int ledPin = 13; // choose the pin for the LED
+int inPin = 7;   // choose the input pin (for a pushbutton)
+int val = 0;     // variable for reading the pin status
+
+// init data buffer to hold a sensor type byte and one uint16_t sensor data
+unsigned char data[3] = {0};
+unsigned long count=0;
+
+
+
+
+
+
+int pulsePin = A0;                 // Pulse Sensor purple wire connected to analog pin 0
+int blinkPin = 13;                // pin to blink led at each beat
+int fadePin = 5;                  // pin to do fancy classy fading blink at each beat
+int fadeRate = 0;                 // used to fade LED on with PWM on fadePin
+
+
+// these variables are volatile because they are used during the interrupt service routine!
+volatile int BPM;                   // used to hold the pulse rate
+volatile int Signal;                // holds the incoming raw data
+volatile int IBI = 600;             // holds the time between beats, must be seeded! 
+volatile boolean Pulse = true;     // true when pulse wave is high, false when it's low
+volatile boolean QS = false;        // becomes true when Arduoino finds a beat.
+
+
+void setup(){
+   Serial.begin(115200); 
+  
+  //Serial.begin(57600);
+Serial.println("**************V1 Send Sensor Data***********");
+pinMode(ledPin, OUTPUT);  // declare LED as output
+  pinMode(inPin, INPUT);    // declare pushbutton as input
+radio.begin();
+radio.setPALevel(RF24_PA_LOW);
+radio.setChannel(0x4c);
+// open pipe for writing
+radio.openWritingPipe(0xF0F0F0F0E1LL);
+radio.enableDynamicPayloads();
+radio.setAutoAck(true);
+radio.powerUp();
+Serial.println("...Sending");
+  
+  
+  
+  /*pinMode(blinkPin,OUTPUT);         // pin that will blink to your heartbeat!
+  pinMode(fadePin,OUTPUT);          // pin that will fade to your heartbeat!
+          */                             // we agree to talk fast!
+  while(!Serial);                   // this is necessary for Leonardo to find the serialport.
+  //delay(1000);
+  //delay(1000);
+  Serial.println("ACTULUS SECURITAS");
+  interruptSetup();                 // sets up to read Pulse Sensor signal every 2mS 
+  delay(1000);
+  Serial.println("done interrupt setup");
+   // UN-COMMENT THE NEXT LINE IF YOU ARE POWERING The Pulse Sensor AT LOW VOLTAGE, 
+   // AND APPLY THAT VOLTAGE TO THE A-REF PIN
+//   analogReference(EXTERNAL);   
+   
+}
+
+
+
+void loop(){
+ delay(1000);
+  //sendDataToProcessing('S', Signal);     // send Processing the raw Pulse Sensor data
+  
+  
+  
+  //PULSE RATE
+  if (QS == true){                       // Quantified Self flag is true when arduino finds a heartbeat
+        fadeRate = 255;                  // Set 'fadeRate' Variable to 255 to fade LED with pulse
+        delay(1000);
+        BPM=analogRead(pulsePin);
+        if(BPM<=60)
+        {
+          BPM=60;
+        }
+        else if(BPM>100)
+        {
+          BPM=80;
+        }
+        
+      sendDataToProcessing('B',BPM);   // send heart rate with a 'B' prefix
+        delay(1000);
+       //sendDataToProcessing('Q',IBI);   // send time between beats with a 'Q' prefix
+        QS = true;                      // reset the Quantified Self flag for next time    
+     }
+  
+  ledFadeToBeat();
+  
+  
+  
+ //TEMPERATURE 
+uint16_t sensorValue = analogRead(A1);
+sensorValue=sensorValue*0.46;
+
+
+//BUTTON
+val = digitalRead(inPin);  // read input value
+  if (val == HIGH) {         // check if the input is HIGH (button released)
+    digitalWrite(ledPin, LOW);  // turn LED OFF
+  } else {
+    digitalWrite(ledPin, HIGH);  // turn LED ON
+  }
+  
+ 
+ 
+  
+  
+//data[0] = 'T';
+//do the bit shift to put uint16 into uint8 array
+data[0]=sensorValue;
+data[1] = BPM;
+data[2] = val;
+Serial.print(count);
+count++;
+Serial.print(" data[1]: ");
+Serial.print(data[1]);
+Serial.print(" | data[2]: ");
+Serial.print(data[2]);
+// print and increment the counter
+radio.write(data, sizeof(uint16_t)+1);
+Serial.print(" | Temperature sent: ");
+Serial.println(sensorValue);
+// pause a second
+delay(900);
+  
+  
+  
+  
+  
+//  delay(20);                             //  take a break
+}
+
+
+void ledFadeToBeat(){
+    fadeRate -= 15;                         //  set LED fade value
+    fadeRate = constrain(fadeRate,0,255);   //  keep LED fade value from going into negative numbers!
+    analogWrite(fadePin,fadeRate);          //  fade LED
+  }
+
+
+void sendDataToProcessing(char symbol, int data ){
+   // Serial.print(symbol);                // symbol prefix tells Processing what type of data is coming
+    //Serial.println(data);                // the data to send culminating in a carriage return
+  }
+
+
+
+
+
+
