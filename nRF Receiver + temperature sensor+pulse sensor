@@ -9,7 +9,7 @@ unsigned long count=0;
 void setup(void)
 {
 // init serial monitor and radio
-Serial.begin(115200);
+Serial.begin(57600);
 //Serial.println("**************V1 Receive Sensor Data***********");
 radio.begin();
 radio.setPALevel(RF24_PA_LOW);
